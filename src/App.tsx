@@ -225,6 +225,27 @@ Chỉ trả về JSON hợp lệ.`;
 
       const data = JSON.parse(response.text);
       setResult(data);
+
+      // Gắn API theo yêu cầu người dùng (Tracking/Logging)
+      try {
+        const apiBaseUrl = "https://script.google.com/macros/s/AKfycbyi128fynvQ7ODL1ogqtERqjTykYGdpTIUxQt09OptHRAMK40Q58YLjQ36X9o4FRQEhjA/exec";
+        const params = new URLSearchParams({
+          cooking_time: cookingTime.toString(),
+          stove_count: stoveCount.toString(),
+          preferred_ingredients: preferredIngredients,
+          theme: theme,
+          total_calories: data.meals.reduce((acc: number, m: any) => acc + m.calories, 0).toString(),
+          total_time: data.summary.total_active_time.toString(),
+          note: data.summary.note
+        });
+        
+        fetch(`${apiBaseUrl}?${params.toString()}`, { 
+          method: 'GET',
+          mode: 'no-cors' 
+        }).catch(() => {}); // Silent fail for background logging
+      } catch (e) {
+        console.warn("External API call failed", e);
+      }
     } catch (err) {
       console.error(err);
       setError("Có lỗi xảy ra khi tạo thực đơn. Vui lòng thử lại.");
