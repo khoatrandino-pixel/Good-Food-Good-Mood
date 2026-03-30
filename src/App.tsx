@@ -88,10 +88,51 @@ export default function App() {
   }, [result, theme]);
 
   const generateMealPlan = async () => {
+    if (loading) return;
+    
     setLoading(true);
     setError(null);
+    setResult(null);
+
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      // 1. Gọi tới Google Apps Script API (GET request)
+      let apiData = null;
+      try {
+        const apiBaseUrl = "https://script.google.com/macros/s/AKfycbyi128fynvQ7ODL1ogqtERqjTykYGdpTIUxQt09OptHRAMK40Q58YLjQ36X9o4FRQEhjA/exec";
+        const params = new URLSearchParams({
+          cooking_time: cookingTime.toString(),
+          stove_count: stoveCount.toString(),
+          preferred_ingredients: preferredIngredients,
+          theme: theme,
+          action: "get_context" // Giả định action để lấy thêm context/data
+        });
+        
+        const apiResponse = await fetch(`${apiBaseUrl}?${params.toString()}`, { 
+          method: 'GET'
+        });
+        
+        if (apiResponse.ok) {
+          apiData = await apiResponse.json();
+        }
+      } catch (e) {
+        console.warn("External API call failed or returned non-JSON", e);
+        // Tiếp tục với AI nếu API lỗi, nhưng user yêu cầu hiển thị lỗi nếu API lỗi
+        // Tuy nhiên, nếu API chỉ là context thì có thể tiếp tục. 
+        // Nhưng user nói: "Nếu API lỗi -> hiển thị: 'Không thể tải dữ liệu, vui lòng thử lại'"
+        // Tôi sẽ tuân thủ yêu cầu này.
+        setError("Không thể tải dữ liệu từ hệ thống, vui lòng thử lại");
+        setLoading(false);
+        return;
+      }
+
+      // 2. Kết nối với AI: Sử dụng data từ API (nếu có) truyền vào prompt
+      const apiKey = (typeof process !== 'undefined' && (process as any).env?.GEMINI_API_KEY) || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+      
+      if (!apiKey) {
+        throw new Error("API Key không khả dụng. Vui lòng kiểm tra cấu hình môi trường.");
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
       
       const prompt = `Bạn là một chuyên gia dinh dưỡng, lifestyle coach và product designer dành cho nhân viên văn phòng bận rộn tại Việt Nam.
 
@@ -105,6 +146,7 @@ INPUT:
 * Số lượng bếp: ${stoveCount}
 * Nguyên liệu hoặc món mong muốn: ${preferredIngredients || "Không có"}
 * Theme giao diện: ${theme}
+* Dữ liệu bổ sung từ hệ thống (API Context): ${apiData ? JSON.stringify(apiData) : "Không có"}
 
 YÊU CẦU CHÍNH:
 1. Món ăn: Phù hợp người Việt, nguyên liệu dễ tìm, nấu đơn giản, ít bước.
@@ -226,7 +268,7 @@ Chỉ trả về JSON hợp lệ.`;
       const data = JSON.parse(response.text);
       setResult(data);
 
-      // Gắn API theo yêu cầu người dùng (Tracking/Logging)
+      // Gắn API tracking (side-effect)
       try {
         const apiBaseUrl = "https://script.google.com/macros/s/AKfycbyi128fynvQ7ODL1ogqtERqjTykYGdpTIUxQt09OptHRAMK40Q58YLjQ36X9o4FRQEhjA/exec";
         const params = new URLSearchParams({
@@ -236,19 +278,20 @@ Chỉ trả về JSON hợp lệ.`;
           theme: theme,
           total_calories: data.meals.reduce((acc: number, m: any) => acc + m.calories, 0).toString(),
           total_time: data.summary.total_active_time.toString(),
-          note: data.summary.note
+          note: data.summary.note,
+          action: "log_result"
         });
         
         fetch(`${apiBaseUrl}?${params.toString()}`, { 
           method: 'GET',
           mode: 'no-cors' 
-        }).catch(() => {}); // Silent fail for background logging
+        }).catch(() => {});
       } catch (e) {
-        console.warn("External API call failed", e);
+        console.warn("Logging failed", e);
       }
     } catch (err) {
       console.error(err);
-      setError("Có lỗi xảy ra khi tạo thực đơn. Vui lòng thử lại.");
+      setError(err instanceof Error ? err.message : "Không thể tải dữ liệu, vui lòng thử lại");
     } finally {
       setLoading(false);
     }
@@ -396,7 +439,7 @@ Chỉ trả về JSON hợp lệ.`;
           <button
             onClick={generateMealPlan}
             disabled={loading}
-            className="w-full py-6 rounded-3xl font-bold text-xs uppercase tracking-[0.3em] transition-all duration-500 flex items-center justify-center gap-4 shadow-lg shadow-current/5"
+            className="w-full py-6 rounded-3xl font-bold text-xs uppercase tracking-[0.3em] transition-all duration-500 flex items-center justify-center gap-4 shadow-lg shadow-current/5 disabled:cursor-not-allowed"
             style={{ 
               backgroundColor: currentColors.accent, 
               color: theme === 'dark' ? '#000' : '#fff',
@@ -404,7 +447,10 @@ Chỉ trả về JSON hợp lệ.`;
             }}
           >
             {loading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>Đang thiết kế...</span>
+              </>
             ) : (
               "Thiết kế thực đơn"
             )}
@@ -518,11 +564,26 @@ Chỉ trả về JSON hợp lệ.`;
           )}
         </AnimatePresence>
 
+        {/* Error State */}
+        {error && !loading && (
+          <div className="py-12 text-center space-y-4">
+            <p className="text-sm font-medium opacity-60" style={{ color: currentColors.text_primary }}>
+              {error}
+            </p>
+            <button 
+              onClick={generateMealPlan}
+              className="text-[10px] font-bold uppercase tracking-[0.2em] underline opacity-40 hover:opacity-100 transition-opacity"
+            >
+              Thử lại
+            </button>
+          </div>
+        )}
+
         {/* Loading State */}
         {loading && (
           <div className="py-40 text-center space-y-8">
             <Loader2 className="w-10 h-10 animate-spin mx-auto opacity-10" />
-            <p className="text-[10px] font-bold uppercase tracking-[0.4em] opacity-20">Đang thiết kế bữa ăn</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.4em] opacity-20">Đang thiết kế bữa ăn...</p>
           </div>
         )}
       </main>
