@@ -4,7 +4,6 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Clock, 
@@ -65,8 +64,6 @@ interface MealPlan {
   timeline: TimelineStep[];
 }
 
-const AI_MODEL = "gemini-3-flash-preview";
-
 export default function App() {
   const [cookingTime, setCookingTime] = useState<number>(25);
   const [stoveCount, setStoveCount] = useState<number>(2);
@@ -95,7 +92,7 @@ export default function App() {
     setResult(null);
 
     try {
-      // 1. Gọi tới Google Apps Script API (GET request)
+      // 1. Gọi tới Google Apps Script API (GET request) - Giữ nguyên tracking side-effect
       let apiData = null;
       try {
         const apiBaseUrl = "https://script.google.com/macros/s/AKfycbyi128fynvQ7ODL1ogqtERqjTykYGdpTIUxQt09OptHRAMK40Q58YLjQ36X9o4FRQEhjA/exec";
@@ -104,7 +101,7 @@ export default function App() {
           stove_count: stoveCount.toString(),
           preferred_ingredients: preferredIngredients,
           theme: theme,
-          action: "get_context" // Giả định action để lấy thêm context/data
+          action: "get_context"
         });
         
         const apiResponse = await fetch(`${apiBaseUrl}?${params.toString()}`, { 
@@ -116,159 +113,32 @@ export default function App() {
         }
       } catch (e) {
         console.warn("External API call failed or returned non-JSON", e);
-        // Tiếp tục với AI nếu API lỗi, nhưng user yêu cầu hiển thị lỗi nếu API lỗi
-        // Tuy nhiên, nếu API chỉ là context thì có thể tiếp tục. 
-        // Nhưng user nói: "Nếu API lỗi -> hiển thị: 'Không thể tải dữ liệu, vui lòng thử lại'"
-        // Tôi sẽ tuân thủ yêu cầu này.
-        setError("Không thể tải dữ liệu từ hệ thống, vui lòng thử lại");
-        setLoading(false);
-        return;
       }
 
-      // 2. Kết nối với AI: Sử dụng data từ API (nếu có) truyền vào prompt
-      const apiKey = (typeof process !== 'undefined' && (process as any).env?.GEMINI_API_KEY) || (import.meta as any).env?.VITE_GEMINI_API_KEY;
-      
-      if (!apiKey) {
-        throw new Error("API Key không khả dụng. Vui lòng kiểm tra cấu hình môi trường.");
-      }
-
-      const ai = new GoogleGenAI({ apiKey });
-      
-      const prompt = `Bạn là một chuyên gia dinh dưỡng, lifestyle coach và product designer dành cho nhân viên văn phòng bận rộn tại Việt Nam.
-
-NHIỆM VỤ:
-* Gợi ý 1 bữa ăn gồm 3 món: Tinh bột (carb), Rau (vegetable), Đạm (protein).
-* Tối ưu thời gian nấu dựa trên: Thời gian người dùng có (${cookingTime} phút) và Số lượng bếp (${stoveCount} bếp).
-* Trả về dữ liệu để render UI theo phong cách: Minimal – Modern Classic.
-
-INPUT:
-* Thời gian nấu (phút): ${cookingTime}
-* Số lượng bếp: ${stoveCount}
-* Nguyên liệu hoặc món mong muốn: ${preferredIngredients || "Không có"}
-* Theme giao diện: ${theme}
-* Dữ liệu bổ sung từ hệ thống (API Context): ${apiData ? JSON.stringify(apiData) : "Không có"}
-
-YÊU CẦU CHÍNH:
-1. Món ăn: Phù hợp người Việt, nguyên liệu dễ tìm, nấu đơn giản, ít bước.
-2. Thời gian: Không tính thời gian chờ cơm chín, nấu song song theo số bếp, tổng thời gian thực tế ≤ ${cookingTime}.
-3. Dinh dưỡng: Cân bằng carb – rau – đạm, có calories ước tính từng món.
-4. Ưu tiên nguyên liệu người dùng: 
-   * Nếu có "Nguyên liệu hoặc món mong muốn", hãy cố gắng chọn ít nhất 1–2 món có chứa nguyên liệu đó.
-   * Ưu tiên phân bổ vào món đạm hoặc rau.
-   * KHÔNG phá vỡ cấu trúc 3 món (carb - rau - đạm).
-   * Nếu KHÔNG thể match hoàn toàn hoặc không khả thi trong thời gian, hãy chọn món gần nhất hoặc đảm bảo bữa ăn hợp lý và note rõ trong preference_match.
-5. UI/UX: Ngôn ngữ ngắn gọn, tinh tế, không dài dòng, dễ đọc, dễ scan.
-
-HEADER APP:
-* Title: "Good Food Good Mood"
-* Tagline: 1 câu ngắn tinh tế (≤ 10 từ)
-
-THEME UI:
-Dựa trên ${theme}, trả thêm config:
-IF theme = "dark":
-* background: "#0F0F0F", card: "#1A1A1A", text_primary: "#F5F5F5", text_secondary: "#A0A0A0", accent: "#D4AF37"
-IF theme = "pink":
-* background: "#FFF1F5", card: "#FFFFFF", text_primary: "#2A2A2A", text_secondary: "#7A7A7A", accent: "#E8A0BF"
-
-Chỉ trả về JSON hợp lệ.`;
-
-      const response = await ai.models.generateContent({
-        model: AI_MODEL,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              app_header: {
-                type: Type.OBJECT,
-                properties: {
-                  title: { type: Type.STRING },
-                  tagline: { type: Type.STRING }
-                },
-                required: ["title", "tagline"]
-              },
-              ui: {
-                type: Type.OBJECT,
-                properties: {
-                  theme: { type: Type.STRING },
-                  colors: {
-                    type: Type.OBJECT,
-                    properties: {
-                      background: { type: Type.STRING },
-                      card: { type: Type.STRING },
-                      text_primary: { type: Type.STRING },
-                      text_secondary: { type: Type.STRING },
-                      accent: { type: Type.STRING }
-                    },
-                    required: ["background", "card", "text_primary", "text_secondary", "accent"]
-                  },
-                  style: { type: Type.STRING }
-                },
-                required: ["theme", "colors", "style"]
-              },
-              summary: {
-                type: Type.OBJECT,
-                properties: {
-                  total_active_time: { type: Type.NUMBER },
-                  fit_within_time: { type: Type.BOOLEAN },
-                  note: { type: Type.STRING },
-                  preference_match: {
-                    type: Type.OBJECT,
-                    properties: {
-                      matched: { type: Type.BOOLEAN },
-                      used_ingredients: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING }
-                      },
-                      note: { type: Type.STRING }
-                    },
-                    required: ["matched", "used_ingredients", "note"]
-                  }
-                },
-                required: ["total_active_time", "fit_within_time", "note", "preference_match"]
-              },
-              meals: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING },
-                    type: { type: Type.STRING, enum: ["carb", "vegetable", "protein"] },
-                    label_vi: { type: Type.STRING },
-                    cook_time: { type: Type.NUMBER },
-                    calories: { type: Type.NUMBER },
-                    parallelizable: { type: Type.BOOLEAN },
-                    short_description: { type: Type.STRING }
-                  },
-                  required: ["name", "type", "label_vi", "cook_time", "calories", "parallelizable", "short_description"]
-                }
-              },
-              timeline: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    step: { type: Type.NUMBER },
-                    time_range: { type: Type.STRING },
-                    actions: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
-                    }
-                  },
-                  required: ["step", "time_range", "actions"]
-                }
-              }
-            },
-            required: ["app_header", "ui", "summary", "meals", "timeline"]
-          }
-        }
+      // 2. Gọi API backend thay vì gọi AI trực tiếp
+      const response = await fetch("/api/generate-meal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          cookingTime,
+          stoveCount,
+          preferredIngredients,
+          theme,
+          apiData
+        }),
       });
 
-      const data = JSON.parse(response.text);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Không thể thiết kế thực đơn lúc này.");
+      }
+
+      const data = await response.json();
       setResult(data);
 
-      // Gắn API tracking (side-effect)
+      // 3. Gắn API tracking (side-effect)
       try {
         const apiBaseUrl = "https://script.google.com/macros/s/AKfycbyi128fynvQ7ODL1ogqtERqjTykYGdpTIUxQt09OptHRAMK40Q58YLjQ36X9o4FRQEhjA/exec";
         const params = new URLSearchParams({
@@ -296,6 +166,7 @@ Chỉ trả về JSON hợp lệ.`;
       setLoading(false);
     }
   };
+
 
   const currentColors = result?.ui.colors || {
     background: theme === 'dark' ? '#0F0F0F' : '#FFF1F5',
